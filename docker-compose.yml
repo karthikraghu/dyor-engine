@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  # ── Execution Sandbox ──────────────────────────────────────────────
+  sandbox:
+    build:
+      context: .
+      dockerfile: services/sandbox/Dockerfile
+    container_name: trader-sandbox
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - SANDBOX_HOST=0.0.0.0
+      - SANDBOX_PORT=8000
+      - DATA_DIR=/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Data Ingester (run once to fetch data) ─────────────────────────
+  data-ingester:
+    build:
+      context: .
+      dockerfile: services/data-ingester/Dockerfile
+    container_name: trader-data-ingester
+    volumes:
+      - ./data:/app/data
+    environment:
+      - EXCHANGE_ID=binance
+      - TRADING_PAIR=BTC/USDT
+      - TIMEFRAME=1h
+      - OHLCV_LIMIT=1000
+      - DATA_DIR=/app/data
+    profiles:
+      - fetch  # Only runs when explicitly requested: docker-compose --profile fetch up data-ingester
+
+  # ── Redis (for Phase 2+) ───────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: trader-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    profiles:
+      - full  # Not needed in Phase 1
+
+volumes:
+  redis-data:
