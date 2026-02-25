@@ -3,13 +3,23 @@ Standardized Backtester Module.
 
 A pure-Python backtesting engine that:
   1. Reads OHLCV data from a .parquet file.
-  2. Applies a trading strategy (via pandas-ta indicators).
+  2. Applies a trading strategy (via ta library indicators).
   3. Simulates trades and computes performance metrics.
   4. Returns a JSON-serializable summary.
 
 This module is strategy-agnostic: it can run hardcoded strategies for
 validation, or execute arbitrary strategy code strings from the AI agents
 (via the sandbox FastAPI layer).
+
+Metrics computed:
+  - Total Return % + Buy-and-Hold benchmark comparison
+  - Sharpe Ratio (annualized)
+  - Sortino Ratio (downside-only volatility)
+  - Calmar Ratio (annual return / max drawdown)
+  - Max Drawdown %
+  - Win Rate %
+  - Profit Factor (dollar-based, not percentage-based)
+  - Slippage model (configurable, default 0.05%)
 """
 
 import json
@@ -44,11 +54,16 @@ class BacktestResult:
     total_trades: int
     win_rate: float
     total_return_pct: float
+    buy_hold_return_pct: float
     sharpe_ratio: float
+    sortino_ratio: float
+    calmar_ratio: float
     max_drawdown_pct: float
     profit_factor: float
     final_equity: float
     initial_equity: float
+    slippage_pct: float
+    commission_pct: float
     equity_curve: list[float]
     trades: list[dict]
 
@@ -91,6 +106,7 @@ def run_backtest(
     timeframe: str = "1h",
     initial_equity: float = 10_000.0,
     commission_pct: float = 0.001,  # 0.1% per trade (Binance spot)
+    slippage_pct: float = 0.0005,   # 0.05% slippage per fill
     signal_column: str = "signal",
 ) -> BacktestResult:
     """
@@ -101,93 +117,137 @@ def run_backtest(
       -1 -> Exit long (sell)
       0  -> Hold
 
+    Features:
+      - Slippage model (fills are worse than close price)
+      - Dollar-based profit factor
+      - Buy-and-hold benchmark
+      - Sortino & Calmar ratios
+      - Equity curve matches final_equity on force-close
+
     Returns:
         BacktestResult with all performance metrics.
     """
     df = apply_signals(df, signal_column)
+    signals = df[signal_column].values
+    closes = df["close"].values
+    n = len(df)
 
     equity = initial_equity
-    position = 0.0  # Number of units held
+    position = 0.0
     entry_price = 0.0
-    equity_curve = []
+    equity_curve = np.empty(n, dtype=np.float64)
     trades = []
 
-    for idx, row in df.iterrows():
-        price = row["close"]
-        sig = row[signal_column]
+    for i in range(n):
+        price = closes[i]
+        sig = signals[i]
 
         # ── BUY signal ──
         if sig == 1 and position == 0:
+            fill_price = price * (1 + slippage_pct)  # Slippage: buy higher
             cost = equity * (1 - commission_pct)
-            position = cost / price
-            entry_price = price
+            position = cost / fill_price
+            entry_price = fill_price
             equity = 0.0
             trades.append({
                 "type": "BUY",
-                "timestamp": str(idx),
-                "price": round(price, 2),
-                "units": round(position, 6),
+                "timestamp": str(df.index[i]),
+                "price": round(fill_price, 2),
+                "units": round(position, 8),
             })
 
         # ── SELL signal ──
         elif sig == -1 and position > 0:
-            revenue = position * price * (1 - commission_pct)
-            pnl_pct = ((price - entry_price) / entry_price) * 100
+            fill_price = price * (1 - slippage_pct)  # Slippage: sell lower
+            revenue = position * fill_price * (1 - commission_pct)
+            pnl_dollar = revenue - (position * entry_price)
+            pnl_pct = ((fill_price - entry_price) / entry_price) * 100
             trades.append({
                 "type": "SELL",
-                "timestamp": str(idx),
-                "price": round(price, 2),
-                "units": round(position, 6),
+                "timestamp": str(df.index[i]),
+                "price": round(fill_price, 2),
+                "units": round(position, 8),
                 "pnl_pct": round(pnl_pct, 2),
+                "pnl_dollar": round(pnl_dollar, 2),
             })
             equity = revenue
             position = 0.0
             entry_price = 0.0
 
-        # Track equity (mark-to-market)
-        current_equity = equity + (position * price if position > 0 else 0)
-        equity_curve.append(round(current_equity, 2))
+        # Mark-to-market equity
+        equity_curve[i] = equity + (position * closes[i] if position > 0 else 0)
 
-    # ── If still holding at end, close position at last price ──
+    # ── Force-close open position at end (BUG 6 fix) ──
     if position > 0:
-        last_price = df["close"].iloc[-1]
-        equity = position * last_price * (1 - commission_pct)
+        last_price = closes[-1] * (1 - slippage_pct)
+        revenue = position * last_price * (1 - commission_pct)
+        pnl_dollar = revenue - (position * entry_price)
+        pnl_pct = ((last_price - entry_price) / entry_price) * 100
+        trades.append({
+            "type": "SELL",
+            "timestamp": str(df.index[-1]),
+            "price": round(last_price, 2),
+            "units": round(position, 8),
+            "pnl_pct": round(pnl_pct, 2),
+            "pnl_dollar": round(pnl_dollar, 2),
+            "forced_close": True,
+        })
+        equity = revenue
         position = 0.0
+        equity_curve[-1] = equity  # Equity curve matches final_equity
 
-    final_equity = equity if equity > 0 else equity_curve[-1] if equity_curve else initial_equity
+    final_equity = equity if equity > 0 else equity_curve[-1] if n > 0 else initial_equity
 
-    # ── Compute performance metrics ──
-    equity_series = pd.Series(equity_curve)
-    returns = equity_series.pct_change().dropna()
-
-    # Sharpe Ratio (annualized, assuming hourly candles → 8760 periods/year)
+    # ── Performance Metrics ──
+    eq_series = pd.Series(equity_curve)
+    returns = eq_series.pct_change().dropna()
     periods_per_year = _periods_per_year(timeframe)
+
+    # Sharpe Ratio (annualized)
     sharpe = 0.0
     if len(returns) > 1 and returns.std() > 0:
         sharpe = (returns.mean() / returns.std()) * np.sqrt(periods_per_year)
 
+    # Sortino Ratio (only penalizes downside volatility)
+    sortino = 0.0
+    downside = returns[returns < 0]
+    if len(downside) > 1 and downside.std() > 0:
+        sortino = (returns.mean() / downside.std()) * np.sqrt(periods_per_year)
+
     # Max Drawdown
-    peak = equity_series.cummax()
-    drawdown = (equity_series - peak) / peak
+    peak = eq_series.cummax()
+    drawdown = (eq_series - peak) / peak
     max_dd = abs(drawdown.min()) * 100 if len(drawdown) > 0 else 0.0
 
     # Win Rate
     sell_trades = [t for t in trades if t["type"] == "SELL"]
-    wins = [t for t in sell_trades if t.get("pnl_pct", 0) > 0]
+    wins = [t for t in sell_trades if t.get("pnl_dollar", 0) > 0]
     win_rate = (len(wins) / len(sell_trades) * 100) if sell_trades else 0.0
 
-    # Profit Factor
-    gross_profit = sum(t["pnl_pct"] for t in sell_trades if t.get("pnl_pct", 0) > 0)
-    gross_loss = abs(sum(t["pnl_pct"] for t in sell_trades if t.get("pnl_pct", 0) < 0))
+    # Profit Factor — DOLLAR-BASED (BUG 7 fix)
+    gross_profit = sum(t["pnl_dollar"] for t in sell_trades if t.get("pnl_dollar", 0) > 0)
+    gross_loss = abs(sum(t["pnl_dollar"] for t in sell_trades if t.get("pnl_dollar", 0) < 0))
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float("inf")
 
     total_return_pct = ((final_equity - initial_equity) / initial_equity) * 100
 
-    # Subsample equity curve so JSON isn't massive (max 500 points)
-    eq_out = equity_curve
-    if len(equity_curve) > 500:
-        step = len(equity_curve) // 500
-        eq_out = equity_curve[::step]
+    # Buy-and-Hold Benchmark
+    bnh_units = (initial_equity * (1 - commission_pct)) / (closes[0] * (1 + slippage_pct))
+    bnh_final = bnh_units * closes[-1] * (1 - slippage_pct) * (1 - commission_pct)
+    bnh_return_pct = ((bnh_final - initial_equity) / initial_equity) * 100
+
+    # Calmar Ratio (annualized return / max drawdown)
+    calmar = 0.0
+    annual_return = total_return_pct * (periods_per_year / n) if n > 0 else 0.0
+    if max_dd > 0:
+        calmar = annual_return / max_dd
+
+    # Subsample equity curve (max 500 points for JSON)
+    eq_list = equity_curve.tolist()
+    eq_out = eq_list
+    if len(eq_list) > 500:
+        step = len(eq_list) // 500
+        eq_out = eq_list[::step]
 
     result = BacktestResult(
         strategy_name=strategy_name,
@@ -195,15 +255,20 @@ def run_backtest(
         timeframe=timeframe,
         start_date=str(df.index[0]),
         end_date=str(df.index[-1]),
-        total_candles=len(df),
+        total_candles=n,
         total_trades=len(sell_trades),
         win_rate=round(win_rate, 2),
         total_return_pct=round(total_return_pct, 2),
+        buy_hold_return_pct=round(bnh_return_pct, 2),
         sharpe_ratio=round(sharpe, 4),
+        sortino_ratio=round(sortino, 4),
+        calmar_ratio=round(calmar, 4),
         max_drawdown_pct=round(max_dd, 2),
         profit_factor=round(profit_factor, 4) if profit_factor != float("inf") else 9999.0,
         final_equity=round(final_equity, 2),
         initial_equity=initial_equity,
+        slippage_pct=slippage_pct,
+        commission_pct=commission_pct,
         equity_curve=eq_out,
         trades=trades,
     )
@@ -211,7 +276,9 @@ def run_backtest(
     logger.info(
         f"Backtest complete: {strategy_name} | "
         f"Return: {result.total_return_pct}% | "
+        f"B&H: {result.buy_hold_return_pct}% | "
         f"Sharpe: {result.sharpe_ratio} | "
+        f"Sortino: {result.sortino_ratio} | "
         f"MaxDD: {result.max_drawdown_pct}%"
     )
 
