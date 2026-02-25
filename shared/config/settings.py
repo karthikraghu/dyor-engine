@@ -37,6 +37,7 @@ class DataConfig:
 class SandboxConfig:
     host: str = os.getenv("SANDBOX_HOST", "0.0.0.0")
     port: int = int(os.getenv("SANDBOX_PORT", "8000"))
+    timeout: int = int(os.getenv("SANDBOX_TIMEOUT", "30"))
 
 
 @dataclass(frozen=True)

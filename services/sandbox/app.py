@@ -12,7 +12,9 @@ Endpoint:
 """
 
 import sys
+import time
 import traceback
+import multiprocessing
 from pathlib import Path
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
@@ -81,6 +83,7 @@ class ExecuteResponse(BaseModel):
     result: Optional[dict] = None
     error: Optional[str] = None
     stdout: Optional[str] = None
+    execution_time_ms: Optional[int] = None
 
 
 # ── Helper ───────────────────────────────────────────────────────────────────
@@ -135,6 +138,80 @@ def _make_safe_globals(df: pd.DataFrame) -> dict:
     }
 
 
+# ── Subprocess Code Execution with Timeout ──────────────────────────────────
+
+def _exec_worker(code: str, df_bytes: bytes, result_queue: multiprocessing.Queue):
+    """
+    Worker function that runs in a separate process.
+    Executes code, applies strategy, runs backtest, and puts the result in the queue.
+    """
+    import io
+    import traceback
+    import pandas as pd
+    import numpy as np
+    import ta as ta_lib
+    from services.sandbox.backtester import run_backtest
+
+    stdout_capture = StringIO()
+    stderr_capture = StringIO()
+
+    try:
+        df = pd.read_parquet(io.BytesIO(df_bytes))
+
+        safe_builtins = {k: __builtins__[k] if isinstance(__builtins__, dict) else getattr(__builtins__, k)
+                         for k in SAFE_BUILTINS}
+        allowed_modules = {"pandas", "ta", "numpy", "math"}
+
+        def restricted_import(name, *args, **kwargs):
+            if name.split(".")[0] not in allowed_modules:
+                raise ImportError(f"Import of '{name}' is not allowed in the sandbox.")
+            return __import__(name, *args, **kwargs)
+
+        safe_builtins["__import__"] = restricted_import
+
+        safe_globals = {
+            "__builtins__": safe_builtins,
+            "pd": pd,
+            "np": np,
+            "ta": ta_lib,
+            "df": df.copy(),
+        }
+
+        with io.StringIO() as stdout_buf, io.StringIO() as stderr_buf:
+            import contextlib
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                exec(code, safe_globals)
+
+                if "apply_strategy" not in safe_globals:
+                    result_queue.put({
+                        "success": False,
+                        "error": "Code must define an `apply_strategy(df)` function.",
+                        "stdout": stdout_buf.getvalue(),
+                    })
+                    return
+
+                result_df = safe_globals["apply_strategy"](safe_globals["df"])
+
+            stdout_text = stdout_buf.getvalue()
+
+        if not isinstance(result_df, pd.DataFrame):
+            result_queue.put({"success": False, "error": "apply_strategy() must return a pandas DataFrame.", "stdout": stdout_text})
+            return
+
+        if "signal" not in result_df.columns:
+            result_queue.put({"success": False, "error": "Returned DataFrame must contain a 'signal' column.", "stdout": stdout_text})
+            return
+
+        result_queue.put({"success": True, "result_df_bytes": result_df.to_parquet(), "stdout": stdout_text})
+
+    except Exception as e:
+        result_queue.put({
+            "success": False,
+            "error": f"{type(e).__name__}: {str(e)}",
+            "stdout": "",
+        })
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -152,6 +229,7 @@ async def execute_code(request: ExecuteRequest):
     - Adds a 'signal' column (1=buy, -1=sell, 0=hold)
     - Returns the modified DataFrame
     """
+    start_time = time.perf_counter()
     parquet_path = _resolve_parquet(request.parquet_file, request.symbol, request.timeframe)
 
     try:
@@ -159,41 +237,52 @@ async def execute_code(request: ExecuteRequest):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # Execute the code in a restricted environment
-    stdout_capture = StringIO()
-    stderr_capture = StringIO()
+    # Serialize DataFrame for subprocess transfer
+    import io as _io
+    df_bytes = df.to_parquet()
+
+    # Execute code in a subprocess with timeout
+    result_queue = multiprocessing.Queue()
+    process = multiprocessing.Process(
+        target=_exec_worker,
+        args=(request.code, df_bytes, result_queue),
+    )
+    process.start()
+    process.join(timeout=config.sandbox.timeout)
+
+    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=5)
+        logger.warning(f"Code execution timed out after {config.sandbox.timeout}s")
+        return ExecuteResponse(
+            success=False,
+            error=f"Execution timed out after {config.sandbox.timeout} seconds.",
+            execution_time_ms=elapsed_ms,
+        )
 
     try:
-        safe_globals = _make_safe_globals(df)
+        worker_result = result_queue.get_nowait()
+    except Exception:
+        return ExecuteResponse(
+            success=False,
+            error="Code execution failed: worker process exited without result.",
+            execution_time_ms=elapsed_ms,
+        )
 
-        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-            exec(request.code, safe_globals)
+    if not worker_result["success"]:
+        return ExecuteResponse(
+            success=False,
+            error=worker_result.get("error", "Unknown error"),
+            stdout=worker_result.get("stdout"),
+            execution_time_ms=elapsed_ms,
+        )
 
-            # The code must define `apply_strategy`
-            if "apply_strategy" not in safe_globals:
-                return ExecuteResponse(
-                    success=False,
-                    error="Code must define an `apply_strategy(df)` function.",
-                    stdout=stdout_capture.getvalue(),
-                )
+    # Worker succeeded — deserialize result_df and run backtest in main process
+    try:
+        result_df = pd.read_parquet(_io.BytesIO(worker_result["result_df_bytes"]))
 
-            result_df = safe_globals["apply_strategy"](safe_globals["df"])
-
-        if not isinstance(result_df, pd.DataFrame):
-            return ExecuteResponse(
-                success=False,
-                error="apply_strategy() must return a pandas DataFrame.",
-                stdout=stdout_capture.getvalue(),
-            )
-
-        if "signal" not in result_df.columns:
-            return ExecuteResponse(
-                success=False,
-                error="Returned DataFrame must contain a 'signal' column.",
-                stdout=stdout_capture.getvalue(),
-            )
-
-        # Run the backtest
         backtest_result = run_backtest(
             result_df,
             strategy_name="ai_generated",
@@ -202,25 +291,30 @@ async def execute_code(request: ExecuteRequest):
             initial_equity=request.initial_equity,
         )
 
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         return ExecuteResponse(
             success=True,
             result=backtest_result.to_dict(),
-            stdout=stdout_capture.getvalue(),
+            stdout=worker_result.get("stdout"),
+            execution_time_ms=elapsed_ms,
         )
 
     except Exception as e:
         tb = traceback.format_exc()
-        logger.error(f"Code execution failed: {e}\n{tb}")
+        logger.error(f"Backtest after execution failed: {e}\n{tb}")
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         return ExecuteResponse(
             success=False,
             error=f"{type(e).__name__}: {str(e)}",
-            stdout=stdout_capture.getvalue(),
+            stdout=worker_result.get("stdout"),
+            execution_time_ms=elapsed_ms,
         )
 
 
 @app.post("/backtest", response_model=ExecuteResponse)
 async def run_builtin_backtest(request: BuiltinBacktestRequest):
     """Run a built-in strategy backtest."""
+    start_time = time.perf_counter()
     parquet_path = _resolve_parquet(request.parquet_file, request.symbol, request.timeframe)
 
     try:
@@ -237,6 +331,7 @@ async def run_builtin_backtest(request: BuiltinBacktestRequest):
         return ExecuteResponse(
             success=False,
             error=f"Unknown strategy '{request.strategy}'. Available: {list(strategies.keys())}",
+            execution_time_ms=int((time.perf_counter() - start_time) * 1000),
         )
 
     name, strategy_fn = strategies[request.strategy]
@@ -250,14 +345,17 @@ async def run_builtin_backtest(request: BuiltinBacktestRequest):
             timeframe=request.timeframe,
             initial_equity=request.initial_equity,
         )
-        return ExecuteResponse(success=True, result=result.to_dict())
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+        return ExecuteResponse(success=True, result=result.to_dict(), execution_time_ms=elapsed_ms)
 
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Backtest failed: {e}\n{tb}")
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         return ExecuteResponse(
             success=False,
             error=f"{type(e).__name__}: {str(e)}",
+            execution_time_ms=elapsed_ms,
         )
 
 
