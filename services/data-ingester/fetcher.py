@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from shared.config.settings import config
 from shared.config.logger import get_logger
+from services.data_ingester.data_validator import validate_and_clean
 
 logger = get_logger(__name__)
 
@@ -72,6 +73,11 @@ async def fetch_ohlcv(
         # Ensure correct dtypes
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
+
+        # Validate data quality
+        df, report = validate_and_clean(df, timeframe=timeframe)
+        if not report.is_clean:
+            logger.warning(f"Data quality issues: {report}")
 
         return df
 
@@ -187,6 +193,11 @@ async def fetch_full_history(
 
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
+
+    # Validate data quality
+    df, report = validate_and_clean(df, timeframe=timeframe)
+    if not report.is_clean:
+        logger.warning(f"Data quality issues in full history: {report}")
 
     config.data.data_dir.mkdir(parents=True, exist_ok=True)
     out_path = config.data.parquet_path(symbol, timeframe)
