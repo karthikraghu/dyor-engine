@@ -36,6 +36,7 @@ from services.sandbox.backtester import (
     strategy_rsi_mean_reversion,
     BacktestResult,
 )
+from services.sandbox.code_validator import validate_code
 
 logger = get_logger(__name__)
 
@@ -231,6 +232,16 @@ async def execute_code(request: ExecuteRequest):
     """
     start_time = time.perf_counter()
     parquet_path = _resolve_parquet(request.parquet_file, request.symbol, request.timeframe)
+
+    # AST validation BEFORE execution (BUG 5 fix)
+    validation = validate_code(request.code)
+    if not validation.is_safe:
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+        return ExecuteResponse(
+            success=False,
+            error=f"Code validation failed: {'; '.join(validation.violations)}",
+            execution_time_ms=elapsed_ms,
+        )
 
     try:
         df = load_data(parquet_path)
