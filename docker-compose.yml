@@ -1,5 +1,11 @@
 version: "3.9"
 
+networks:
+  sandbox-net:
+    internal: true      # No internet access for sandbox (BUG 3 fix)
+  backend-net:
+    driver: bridge      # Services that need internet access
+
 services:
   # ── Execution Sandbox ──────────────────────────────────────────────
   sandbox:
@@ -10,12 +16,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:ro               # READ-ONLY (BUG 2 fix)
     environment:
       - SANDBOX_HOST=0.0.0.0
       - SANDBOX_PORT=8000
       - DATA_DIR=/app/data
+      - SANDBOX_TIMEOUT=30
+    mem_limit: 512m                        # BUG 4 fix
+    cpus: 0.5                              # BUG 4 fix
     restart: unless-stopped
+    networks:
+      - sandbox-net                        # Isolated network (BUG 3 fix)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -36,10 +47,12 @@ services:
       - TIMEFRAME=1h
       - OHLCV_LIMIT=1000
       - DATA_DIR=/app/data
+    networks:
+      - backend-net
     profiles:
-      - fetch  # Only runs when explicitly requested: docker-compose --profile fetch up data-ingester
+      - fetch
 
-  # ── Redis (for Phase 2+) ───────────────────────────────────────────
+  # ── Redis ──────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: trader-redis
@@ -48,8 +61,13 @@ services:
     volumes:
       - redis-data:/data
     restart: unless-stopped
-    profiles:
-      - full  # Not needed in Phase 1
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   redis-data:
