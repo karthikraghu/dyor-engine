@@ -22,6 +22,7 @@ from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -44,6 +45,21 @@ app = FastAPI(
     title="Trader Engine — Execution Sandbox",
     description="Isolated execution environment for AI-generated trading strategies.",
     version="0.1.0",
+)
+
+# ── CORS Middleware (BUG 12 fix) ─────────────────────────────────────────────
+CORS_ORIGINS = [
+    "http://localhost:3000",   # Next.js / React dev server
+    "http://localhost:5173",   # Vite dev server
+    "http://localhost:8080",   # Generic local dev
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
