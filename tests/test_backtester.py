@@ -1,5 +1,5 @@
 """Tests for the backtesting engine."""
-from services.sandbox.backtester import run_backtest, BacktestResult
+from services.sandbox.backtester import run_backtest, BacktestResult, METRICS_FOR_AI_ANALYSIS
 
 
 def test_backtest_returns_result(sample_ohlcv_with_signals):
@@ -67,3 +67,37 @@ def test_backtest_to_dict(sample_ohlcv_with_signals):
     d = result.to_dict()
     assert isinstance(d, dict)
     assert "trades" in d
+
+
+def test_metrics_for_ai_contains_all_expected_keys(sample_ohlcv_with_signals):
+    result = run_backtest(sample_ohlcv_with_signals)
+    ai_metrics = result.metrics_for_ai()
+    for key in METRICS_FOR_AI_ANALYSIS:
+        assert key in ai_metrics
+        assert "value" in ai_metrics[key]
+        assert "description" in ai_metrics[key]
+
+
+def test_metrics_for_ai_includes_context_fields(sample_ohlcv_with_signals):
+    result = run_backtest(sample_ohlcv_with_signals)
+    ai_metrics = result.metrics_for_ai()
+    for field in ("strategy_name", "symbol", "timeframe", "start_date", "end_date"):
+        assert field in ai_metrics
+        assert "value" in ai_metrics[field]
+        assert "description" in ai_metrics[field]
+
+
+def test_metrics_for_ai_excludes_raw_data(sample_ohlcv_with_signals):
+    result = run_backtest(sample_ohlcv_with_signals)
+    ai_metrics = result.metrics_for_ai()
+    assert "equity_curve" not in ai_metrics
+    assert "trades" not in ai_metrics
+
+
+def test_metrics_for_ai_values_match_result(sample_ohlcv_with_signals):
+    result = run_backtest(sample_ohlcv_with_signals)
+    ai_metrics = result.metrics_for_ai()
+    assert ai_metrics["total_return_pct"]["value"] == result.total_return_pct
+    assert ai_metrics["sharpe_ratio"]["value"] == result.sharpe_ratio
+    assert ai_metrics["win_rate"]["value"] == result.win_rate
+    assert ai_metrics["total_trades"]["value"] == result.total_trades

@@ -41,6 +41,24 @@ from shared.config.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ── Metrics Descriptions (for AI analysis) ───────────────────────────────────
+
+METRICS_FOR_AI_ANALYSIS = {
+    "total_return_pct": "Total return percentage of the strategy over the backtest period.",
+    "buy_hold_return_pct": "Buy-and-hold benchmark return percentage for comparison.",
+    "sharpe_ratio": "Annualized Sharpe Ratio — risk-adjusted return (reward per unit of total volatility).",
+    "sortino_ratio": "Annualized Sortino Ratio — risk-adjusted return penalizing only downside volatility.",
+    "calmar_ratio": "Calmar Ratio — annualized return divided by maximum drawdown.",
+    "max_drawdown_pct": "Maximum drawdown percentage — largest peak-to-trough equity decline.",
+    "win_rate": "Win rate percentage — fraction of trades that were profitable.",
+    "profit_factor": "Profit Factor — gross profit divided by gross loss (dollar-based).",
+    "total_trades": "Total number of completed (round-trip) trades.",
+    "final_equity": "Final portfolio equity after all trades.",
+    "initial_equity": "Starting portfolio equity.",
+    "total_candles": "Total number of OHLCV candles in the backtest period.",
+}
+
+
 # ── Data Models ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -72,6 +90,28 @@ class BacktestResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def metrics_for_ai(self) -> dict:
+        """
+        Return a summary of performance metrics intended for AI analysis.
+
+        Excludes raw data (equity_curve, trades) and configuration fields,
+        returning only the key performance metrics with descriptions that
+        help the AI understand what each value represents.
+        """
+        metrics = {
+            key: {
+                "value": getattr(self, key),
+                "description": METRICS_FOR_AI_ANALYSIS[key],
+            }
+            for key in METRICS_FOR_AI_ANALYSIS
+        }
+        metrics["strategy_name"] = {"value": self.strategy_name, "description": "Name of the strategy evaluated."}
+        metrics["symbol"] = {"value": self.symbol, "description": "Trading pair symbol."}
+        metrics["timeframe"] = {"value": self.timeframe, "description": "Candle timeframe used."}
+        metrics["start_date"] = {"value": self.start_date, "description": "Backtest start date."}
+        metrics["end_date"] = {"value": self.end_date, "description": "Backtest end date."}
+        return metrics
 
 
 # ── Core Backtesting Engine ──────────────────────────────────────────────────
@@ -280,6 +320,13 @@ def run_backtest(
         f"Sharpe: {result.sharpe_ratio} | "
         f"Sortino: {result.sortino_ratio} | "
         f"MaxDD: {result.max_drawdown_pct}%"
+    )
+
+    # Log all metrics retrieved for AI analysis
+    ai_metrics = result.metrics_for_ai()
+    metric_names = [k for k in ai_metrics]
+    logger.info(
+        f"Metrics retrieved for AI analysis: {', '.join(metric_names)}"
     )
 
     return result
