@@ -324,7 +324,7 @@ def run_backtest(
 
     # Log all metrics retrieved for AI analysis
     ai_metrics = result.metrics_for_ai()
-    metric_names = [k for k in ai_metrics]
+    metric_names = list(ai_metrics)
     logger.info(
         f"Metrics retrieved for AI analysis: {', '.join(metric_names)}"
     )
