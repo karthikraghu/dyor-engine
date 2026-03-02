@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import ccxt.async_support as ccxt_async
+import aiohttp
 import pandas as pd
 
 # Allow imports from project root
@@ -47,7 +48,12 @@ async def fetch_ohlcv(
     timeframe = timeframe or config.exchange.timeframe
     limit = limit or config.exchange.ohlcv_limit
 
-    exchange = ccxt_async.binance({"enableRateLimit": True})
+    exchange = ccxt_async.binance({
+        "enableRateLimit": True,
+        "connector_params": {
+            "resolver": aiohttp.ThreadedResolver()
+        }
+    })
 
     try:
         logger.info(f"Fetching {limit} candles of {symbol} ({timeframe}) from Binance...")
@@ -141,7 +147,12 @@ async def fetch_full_history(
     symbol = symbol or config.exchange.trading_pair
     timeframe = timeframe or config.exchange.timeframe
 
-    exchange = ccxt_async.binance({"enableRateLimit": True})
+    exchange = ccxt_async.binance({
+        "enableRateLimit": True,
+        "connector_params": {
+            "resolver": aiohttp.ThreadedResolver()
+        }
+    })
     since_ms = int(
         datetime.strptime(since_date, "%Y-%m-%d")
         .replace(tzinfo=timezone.utc)
