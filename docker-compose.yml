@@ -34,10 +34,10 @@ services:
       retries: 3
 
   # ── Data Ingester (run once to fetch data) ─────────────────────────
-  data-ingester:
+  data_ingester:
     build:
       context: .
-      dockerfile: services/data-ingester/Dockerfile
+      dockerfile: services/data_ingester/Dockerfile
     container_name: trader-data-ingester
     volumes:
       - ./data:/app/data

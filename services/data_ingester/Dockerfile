@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY shared/ ./shared/
 
 # Copy data-ingester service
-COPY services/data-ingester/ ./services/data-ingester/
+COPY services/data_ingester/ ./services/data_ingester/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r services/data-ingester/requirements.txt
+RUN pip install --no-cache-dir -r services/data_ingester/requirements.txt
 
 # Create data directory
 RUN mkdir -p /app/data
 
-CMD ["python", "-m", "services.data-ingester.fetcher"]
+CMD ["python", "-m", "services.data_ingester.fetcher"]

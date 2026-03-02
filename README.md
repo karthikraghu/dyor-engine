@@ -28,9 +28,9 @@ Binance ──► Data Fetcher ──► Market Data (.parquet)
 
 ```
 services/
-├── data-ingester/     # Fetches OHLCV data from Binance via CCXT
+├── data_ingester/     # Fetches OHLCV data from Binance via CCXT
 ├── sandbox/           # Backtesting engine + FastAPI execution API
-└── ai-orchestrator/   # LangGraph multi-agent system (coming soon)
+└── ai_orchestrator/   # LangGraph multi-agent system (coming soon)
 
 apps/
 └── frontend/          # Next.js dashboard (coming soon)
@@ -46,7 +46,7 @@ pip install ccxt pandas pyarrow python-dotenv ta fastapi uvicorn numpy
 cp .env.example .env
 
 # 3. Fetch market data
-python -m services.data-ingester.fetcher --symbol "BTC/USDT" --timeframe "1h" --limit 1000
+python -m services.data_ingester.fetcher --symbol "BTC/USDT" --timeframe "1h" --limit 1000
 
 # 4. Run a backtest
 python -m services.sandbox.backtester data/BTC_USDT_1h.parquet --strategy macd
