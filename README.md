@@ -8,7 +8,7 @@ An AI-powered crypto trading strategy generator. It analyzes market data, genera
 Binance ──► Data Fetcher ──► Market Data (.parquet)
                                     │
                                     ▼
-                            AI Agents (Gemini Pro)
+                            AI Agents (heuristic now, LLM-ready)
                             ├── Analyze market context
                             ├── Score news sentiment
                             └── Generate strategy code
@@ -30,7 +30,7 @@ Binance ──► Data Fetcher ──► Market Data (.parquet)
 services/
 ├── data_ingester/     # Fetches OHLCV data from Binance via CCXT
 ├── sandbox/           # Backtesting engine + FastAPI execution API
-└── ai_orchestrator/   # LangGraph multi-agent system (coming soon)
+└── ai_orchestrator/   # Multi-agent trading decision orchestrator API
 
 apps/
 └── frontend/          # Next.js dashboard (coming soon)
@@ -53,6 +53,9 @@ python -m services.sandbox.backtester data/BTC_USDT_1h.parquet --strategy macd
 
 # 5. Start the sandbox API
 python -m uvicorn services.sandbox.app:app --host 127.0.0.1 --port 8000
+
+# 6. Start the AI orchestrator API
+python -m uvicorn services.ai_orchestrator.app:app --host 127.0.0.1 --port 8010
 ```
 
 ## Tech Stack
@@ -60,7 +63,7 @@ python -m uvicorn services.sandbox.app:app --host 127.0.0.1 --port 8000
 - **Python** — Core language for data + AI
 - **CCXT** — Exchange connectivity (Binance)
 - **FastAPI** — Sandbox execution API
-- **LangGraph + Gemini Pro** — Multi-agent orchestration
+- **Deterministic multi-agent pipeline (LLM-ready)** — Trading decision orchestration
 - **Docker** — Service containerization
 - **Next.js** — Frontend dashboard
 

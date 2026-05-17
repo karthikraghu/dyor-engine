@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from services.sandbox.app import app
+import services.sandbox.app as sandbox_app
 
 
 @pytest.fixture
@@ -18,15 +19,49 @@ def test_health_endpoint(client):
     assert data["service"] == "sandbox"
 
 
-def test_execute_valid_code(client):
+def test_execute_valid_code(client, sample_ohlcv, tmp_path, monkeypatch):
+    class InlineProcess:
+        def __init__(self, target, args):
+            self._target = target
+            self._args = args
+            self._alive = False
+
+        def start(self):
+            self._alive = True
+            self._target(*self._args)
+            self._alive = False
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return self._alive
+
+        def kill(self):
+            self._alive = False
+
+    monkeypatch.setattr(sandbox_app.multiprocessing, "Process", InlineProcess)
+
     code = """
 def apply_strategy(df):
     df['signal'] = 0
     return df
 """
-    response = client.post("/execute", json={"code": code})
+    parquet_file = tmp_path / "sandbox_execute_test.parquet"
+    sample_ohlcv.to_parquet(parquet_file)
+
+    response = client.post(
+        "/execute",
+        json={
+            "code": code,
+            "parquet_file": str(parquet_file),
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+        },
+    )
     assert response.status_code == 200
     data = response.json()
+    assert data["success"] is True
     assert "execution_time_ms" in data
 
 

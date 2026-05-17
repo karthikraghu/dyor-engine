@@ -41,10 +41,20 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True)
+class OrchestratorConfig:
+    host: str = os.getenv("ORCHESTRATOR_HOST", "0.0.0.0")
+    port: int = int(os.getenv("ORCHESTRATOR_PORT", "8010"))
+    default_risk_profile: str = os.getenv("ORCHESTRATOR_RISK_PROFILE", "balanced")
+    model_provider: str = os.getenv("ORCHESTRATOR_MODEL_PROVIDER", "heuristic")
+    model_name: str = os.getenv("ORCHESTRATOR_MODEL_NAME", "rule-based-v1")
+
+
+@dataclass(frozen=True)
 class AppConfig:
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     data: DataConfig = field(default_factory=DataConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
+    orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
 
 
 # Singleton config instance
