@@ -33,7 +33,7 @@ services/
 └── ai_orchestrator/   # Multi-agent trading decision orchestrator API
 
 apps/
-└── frontend/          # Next.js dashboard (coming soon)
+└── frontend/          # Next.js dashboard for decisions and backtests
 ```
 
 ## Quick Start
@@ -56,7 +56,17 @@ python -m uvicorn services.sandbox.app:app --host 127.0.0.1 --port 8000
 
 # 6. Start the AI orchestrator API
 python -m uvicorn services.ai_orchestrator.app:app --host 127.0.0.1 --port 8010
+
+# 7. Start the frontend dashboard
+cd apps/frontend
+npm install
+npm run dev
 ```
+
+Open the dashboard at `http://localhost:3000`. By default it calls the sandbox
+API at `http://localhost:8000` and the orchestrator API at
+`http://localhost:8010`. Override those with `NEXT_PUBLIC_SANDBOX_API_URL` and
+`NEXT_PUBLIC_ORCHESTRATOR_API_URL` in `apps/frontend/.env.local` if needed.
 
 ## Tech Stack
 
@@ -65,7 +75,7 @@ python -m uvicorn services.ai_orchestrator.app:app --host 127.0.0.1 --port 8010
 - **FastAPI** — Sandbox execution API
 - **Deterministic multi-agent pipeline (LLM-ready)** — Trading decision orchestration
 - **Docker** — Service containerization
-- **Next.js** — Frontend dashboard
+- **Next.js + shadcn/ui** — Frontend dashboard
 
 ## License
 
