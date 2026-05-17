@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pandas as pd
 import uvicorn
@@ -38,6 +39,20 @@ app = FastAPI(
     title="Trader Engine - AI Orchestrator",
     description="Multi-agent orchestration service for trading decisions and strategy generation.",
     version="0.1.0",
+)
+
+CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

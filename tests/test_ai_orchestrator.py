@@ -44,6 +44,18 @@ def test_ai_orchestrator_health_endpoint():
     assert data["service"] == "ai_orchestrator"
 
 
+def test_ai_orchestrator_cors_headers():
+    client = TestClient(app)
+    response = client.options(
+        "/decision",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
 def test_decision_endpoint_with_inline_candles(sample_ohlcv):
     client = TestClient(app)
 
